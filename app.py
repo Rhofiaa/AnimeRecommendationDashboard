@@ -14,10 +14,10 @@ st.set_page_config(page_title="Anime Recommender", page_icon="🎯", layout="wid
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
-MAX_USERS = 5000
+MAX_USERS = 3000  # Reduced from 5000
 MIN_INTERACTIONS = 5
 MEAN_CENTER = True
-EVAL_SAMPLE_SIZE = 600
+EVAL_SAMPLE_SIZE = 300  # Reduced from 600
 
 
 def _locate_default_file(filename: str) -> Optional[Path]:
@@ -37,6 +37,13 @@ def load_datasets(
     anime_path: Optional[str],
     rating_path: Optional[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # Optimize dtype for large rating file
+    dtype_dict = {
+        "user_id": "int32",
+        "anime_id": "int32",
+        "rating": "float32"
+    }
+    
     if anime_bytes is not None:
         anime_df = pd.read_csv(io.BytesIO(anime_bytes))
     elif anime_path:
@@ -45,9 +52,9 @@ def load_datasets(
         raise FileNotFoundError("Anime metadata CSV tidak ditemukan.")
 
     if rating_bytes is not None:
-        rating_df = pd.read_csv(io.BytesIO(rating_bytes))
+        rating_df = pd.read_csv(io.BytesIO(rating_bytes), dtype=dtype_dict)
     elif rating_path:
-        rating_df = pd.read_csv(rating_path)
+        rating_df = pd.read_csv(rating_path, dtype=dtype_dict)
     else:
         raise FileNotFoundError("Rating CSV tidak ditemukan.")
 
@@ -56,6 +63,9 @@ def load_datasets(
 
 @st.cache_data(show_spinner=False)
 def prepare_cf_frame(anime_df: pd.DataFrame, rating_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    # Reduce memory by filtering early
+    rating_df = rating_df[rating_df["rating"] != -1].copy()
+    
     merged = rating_df.merge(anime_df, on="anime_id", how="left", suffixes=("_user", "_anime"))
     rating_col = "rating_user" if "rating_user" in merged.columns else "rating"
     merged[rating_col] = pd.to_numeric(merged[rating_col], errors="coerce")
@@ -66,6 +76,11 @@ def prepare_cf_frame(anime_df: pd.DataFrame, rating_df: pd.DataFrame) -> tuple[p
         .dropna(subset=["rating"])
     )
     cf_ratings = cf_ratings[cf_ratings["rating"] != -1]
+    
+    # Optimize data types
+    cf_ratings["user_id"] = cf_ratings["user_id"].astype("int32")
+    cf_ratings["anime_id"] = cf_ratings["anime_id"].astype("int32")
+    cf_ratings["rating"] = cf_ratings["rating"].astype("float32")
 
     meta_cols = [
         col
@@ -73,7 +88,8 @@ def prepare_cf_frame(anime_df: pd.DataFrame, rating_df: pd.DataFrame) -> tuple[p
         if col in merged.columns
     ]
     anime_meta = merged[meta_cols].drop_duplicates("anime_id") if meta_cols else anime_df
-
+    
+    del merged
     return cf_ratings, anime_meta
 
 
@@ -89,11 +105,11 @@ def split_train_test(cf_ratings: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFra
     return train_df, test_df
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_data(show_spinner=False)
 def build_user_similarity(train_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     counts = train_df["user_id"].value_counts()
     active_users = counts[counts >= MIN_INTERACTIONS].index
-    filtered = train_df[train_df["user_id"].isin(active_users)]
+    filtered = train_df[train_df["user_id"].isin(active_users)].copy()
 
     if filtered["user_id"].nunique() > MAX_USERS:
         top_users = counts.head(MAX_USERS).index
@@ -111,9 +127,15 @@ def build_user_similarity(train_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Data
 
     centered = user_item.sub(user_item.mean(axis=1), axis=0) if MEAN_CENTER else user_item.copy()
     filled = centered.fillna(0)
+    
+    # Use float32 to reduce memory
+    filled = filled.astype("float32")
+    
     similarity = cosine_similarity(filled)
     similarity_df = pd.DataFrame(similarity, index=user_item.index, columns=user_item.index)
-
+    similarity_df = similarity_df.astype("float32")
+    
+    del filled
     return user_item, centered, similarity_df
 
 
