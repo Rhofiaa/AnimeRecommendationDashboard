@@ -3,7 +3,20 @@
 Panduan singkat memakai dashboard rekomendasi anime.
 
 ## Persiapan
-- Masuk ke folder proyek di terminal.
+- Clone repositori:
+
+```bash
+git clone https://github.com/Attazy/project-SPR.git
+cd project-SPR
+```
+
+- Buat virtual environment:
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
 - Instal semua paket: `pip install -r requirements.txt`.
 
 ## Menjalankan
